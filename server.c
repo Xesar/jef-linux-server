@@ -9,13 +9,18 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/sendfile.h>
+#include <dirent.h>
 
-#define PORT_NO				20001
-#define SERVER_IP			"127.0.0.1"
+#define PORT_NO			20001
+#define SERVER_IP		"127.0.0.1"
+
 #define JEF_FILE_UP		0
 #define JEF_FILE_DOWN	1
 #define JEF_FILE_NEWEST	2
 #define JEF_FILE_LIST	3
+
+#define F_HDR			0
+#define END_HDR			9
 
 void error(const char *msg, int end){
 	perror(msg);
@@ -30,6 +35,13 @@ short handshake(short socket_id){
 		error("handshake", 1);
 	header ^= 0x1ef0;
 	return header;
+}
+
+void send_header(short socket_id, unsigned char h_type){
+	short header = 0xf110 | (h_type & 0xf);
+	ssize_t len = send(socket_id, &header, sizeof(header), 0);
+	if(len<0)
+		error("header", 1);
 }
 
 void send_file_amount(short socket_id, short file_amount){
@@ -176,6 +188,28 @@ int main(int argc, char *argv[]){
 			send_file_size(peer_socket, file_size);
 			send_file(peer_socket, fd, file_size);
 		}
+	}else if(header==JEF_FILE_LIST){
+		DIR *dir = opendir("/home/xesar/prog/c/jef-linux-server");
+		struct dirent *dir_ent;
+		if(dir==NULL)
+			error("dir", 1);
+
+		while(dir_ent=readdir(dir)){
+			if(dir_ent->d_type==8){
+				send_header(peer_socket, F_HDR);
+				FILE *f_ptr;
+				f_ptr = fopen(dir_ent->d_name, "r");
+				fseek(f_ptr, 0, SEEK_END);
+				int f_len = ftell(f_ptr);
+				send_file_name(peer_socket, dir_ent->d_name);
+				send_file_size(peer_socket, f_len);
+				fclose(f_ptr);
+			}
+		}
+		send_header(peer_socket, END_HDR);
+
+		closedir(dir);
+
 	}
 	close(peer_socket);
 	close(server_socket);
