@@ -10,14 +10,119 @@
 #include <fcntl.h>
 #include <sys/sendfile.h>
 
+#define PORT_NO				20001
+#define SERVER_IP			"127.0.0.1"
+#define JEF_FILE_UP		0
+#define JEF_FILE_DOWN	1
+#define JEF_FILE_NEWEST	2
+#define JEF_FILE_LIST	3
+
 void error(const char *msg, int end){
 	perror(msg);
 	if(end)
 		exit(-1);
 }
 
-#define PORT_NO		20001
-#define SERVER_IP	"127.0.0.1"
+short handshake(short socket_id){
+	short header;
+	ssize_t len = recv(socket_id, &header, sizeof(header), 0);
+	if(len<0)
+		error("handshake", 1);
+	header ^= 0x1ef0;
+	return header;
+}
+
+void send_file_amount(short socket_id, short file_amount){
+	ssize_t len = send(socket_id, &file_amount, sizeof(short), 0);
+	if(len<0)
+		error("file amount: ",1);
+}
+
+void send_file_name(short socket_id, char * file_name){
+	ssize_t len = send(socket_id, file_name, 256, 0);
+	if(len<0)
+		error("file name", 1);
+}
+
+void send_file_size(short socket_id, int file_size){
+	ssize_t len = send(socket_id, &file_size, sizeof(file_size), 0);
+	if(len<0)
+		error("file name", 1);
+}
+
+void send_file(short socket_id, short fd, int file_size){
+	long offset = 0;
+	int remain_data = file_size;
+	int sent_bytes = 0;
+	while(((sent_bytes = sendfile(socket_id, fd, &offset, 256))>0) && (remain_data>0)){
+		remain_data -= sent_bytes;
+		printf("sent: %d\tdone: %.2f%%\n", sent_bytes, 100.0-(remain_data*1.0)/(file_size*1.0)*100.0);
+	}
+}
+
+const char * recv_file_name(short socket_id){
+	static char file_name[256];
+	ssize_t len = recv(socket_id, file_name, 256, 0);
+	if(len<0)
+		error("file name", 1);
+	return file_name;
+}
+
+int recv_file_size(short socket_id){
+	int file_size;
+	ssize_t len = recv(socket_id, &file_size, sizeof(file_size), 0);
+	if(len<0)
+		error("no file", 1);
+	return file_size;
+}
+
+short recv_file_amount(short socket_id){
+	short file_amount;
+	ssize_t len = recv(socket_id, &file_amount, sizeof(file_amount), 0);
+	if(len<0)
+		error("no amount", 1);
+	return file_amount;
+}
+
+void recv_file(short socket_id, char * file_name, int file_size){
+	char buffer[256];
+	ssize_t len;
+	int remain_data = file_size;
+	FILE *rec_file;
+	rec_file = fopen(file_name, "w");
+	if(rec_file == NULL)
+		error("file", 1);
+
+	printf("%s: %d bytes\n", file_name, file_size);
+
+	int full_count = file_size/sizeof(buffer);
+	for(int i=0; i<full_count; i++){
+		len = recv(socket_id, buffer, sizeof(buffer), 0);
+		if(len<0)
+			error("len", 1);
+		fwrite(buffer, sizeof(char), len, rec_file);
+		remain_data -= len;
+		printf("received: %d bytes, %d bytes remaining\n", len, remain_data);
+	}
+	if(remain_data){
+		len = recv(socket_id, buffer, file_size%256, 0);
+		if(len<0)
+			error("len", 1);
+		fwrite(buffer, sizeof(char), len, rec_file);
+		remain_data -= len;
+		printf("received: %d bytes, %d bytes remaining\n", len, remain_data);
+	}
+
+	// this is not working for multiple files, bad data from recv
+	// while((remain_data>0) && (len = recv(socket_id, buffer, sizeof(buffer), 0))>0){
+	// 	fwrite(buffer, sizeof(char), len, rec_file);
+	// 	remain_data -= len;
+	// 	printf("received: %d bytes, %d bytes remaining\n", len, remain_data);
+	// }
+
+	printf("\n");
+	fclose(rec_file);
+}
 
 int main(int argc, char *argv[]){
 	int server_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -40,74 +145,37 @@ int main(int argc, char *argv[]){
 	int peer_socket = accept(server_socket, (struct sockaddr *) &peer_addr, &sock_len);
 	if(peer_socket<0)
 		error("accept", 1);
-	fprintf(stdout, "peer: %s\n", inet_ntoa(peer_addr.sin_addr));
+	printf("peer: %s\n", inet_ntoa(peer_addr.sin_addr));
 
-	short header;
-	ssize_t len = recv(peer_socket, &header, sizeof(header), 0);
-	if(len<0)
-		error("handshake", 1);
+	short header = handshake(peer_socket);
 
-	char file_name[256];
-	int file_size, remain_data;
-	
-	switch(header){
-	case 0x1ef0:
-		recv(peer_socket, file_name, 256, 0);
-		fprintf(stdout, "file name: %s\n", file_name);
-
-		char buffer[256];
-		recv(peer_socket, buffer, 256, 0);
-		file_size = atoi(buffer);
-		fprintf(stdout, "file size: %d bytes\n", file_size);
-
-		FILE *received_file;
-		received_file = fopen(file_name, "w");
-		if(received_file == NULL)
-			error("file", 1);
-
-		remain_data = file_size;
-		while((remain_data>0) && ((len = recv(peer_socket, buffer, 256, 0))>0)){
-			fwrite(buffer, sizeof(char), len, received_file);
-			remain_data -= len;
-			fprintf(stdout, "received: %d bytes, %d bytes remaining\n", len, remain_data);
+	if(header==JEF_FILE_UP){
+		short file_count = recv_file_amount(peer_socket);
+		int file_size;
+		char file_name[256];
+		for(int i=0; i<file_count; i++){
+			strcpy(file_name, recv_file_name(peer_socket));
+			file_size = recv_file_size(peer_socket);
+			recv_file(peer_socket, file_name, file_size);
 		}
-		fclose(received_file);
-		break;
-	case 0x1ef1:
-		recv(peer_socket, file_name, 256, 0);
-		printf("file name: %s\n", file_name);
 
-		int fd = open(file_name, O_RDONLY);
-		if(fd<0)
-			error("opening file", 1);
-		struct stat file_stat;
-		if(fstat(fd, &file_stat)<0)
-			error("fstat", 1);
+	}else if(header==JEF_FILE_DOWN){
+		short file_amount = recv_file_amount(peer_socket);
+		char file_name[256];
+		for(short i=0; i<file_amount; i++){
+			strcpy(file_name, recv_file_name(peer_socket));
 
-		char file_size_buffer[32];
-		sprintf(file_size_buffer, "%d", file_stat.st_size);
-		printf("file size: %s bytes\n", file_size_buffer);
-		len = send(peer_socket, file_size_buffer, 32, 0);
-		if(len<0)
-			error("file size", 1);
-
-		long offset = 0;
-		int remain_data = file_stat.st_size;
-		int sent_bytes = 0;
-		while(((sent_bytes = sendfile(peer_socket, fd, &offset, 256))>0) && (remain_data>0)){
-			remain_data -= sent_bytes;
-			fprintf(stdout, "sent %d bytes, %d bytes remaining\n", sent_bytes, remain_data);
+			int fd = open(file_name, O_RDONLY);
+			if(fd<0)
+				error("opening file", 1);
+			struct stat file_stat;
+			if(fstat(fd, &file_stat)<0)
+				error("fstat", 1);
+			
+			int file_size = file_stat.st_size;
+			send_file_size(peer_socket, file_size);
+			send_file(peer_socket, fd, file_size);
 		}
-		break;
-	case 0x1ef2:
-		
-		break;
-	case 0x1ef3:
-		
-		break;
-	default:
-
-		break;
 	}
 	close(peer_socket);
 	close(server_socket);
