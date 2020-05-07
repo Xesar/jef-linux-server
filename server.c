@@ -42,28 +42,73 @@ int main(int argc, char *argv[]){
 		error("accept", 1);
 	fprintf(stdout, "peer: %s\n", inet_ntoa(peer_addr.sin_addr));
 
+	short header;
+	ssize_t len = recv(peer_socket, &header, sizeof(header), 0);
+	if(len<0)
+		error("handshake", 1);
+
 	char file_name[256];
-	recv(peer_socket, file_name, 256, 0);
-	fprintf(stdout, "file name: %s\n", file_name);
+	int file_size, remain_data;
+	
+	switch(header){
+	case 0x1ef0:
+		recv(peer_socket, file_name, 256, 0);
+		fprintf(stdout, "file name: %s\n", file_name);
 
-	char buffer[256];
-	recv(peer_socket, buffer, 256, 0);
-	int file_size = atoi(buffer);
-	fprintf(stdout, "file size: %d bytes\n", file_size);
+		char buffer[256];
+		recv(peer_socket, buffer, 256, 0);
+		file_size = atoi(buffer);
+		fprintf(stdout, "file size: %d bytes\n", file_size);
 
-	FILE *received_file;
-	received_file = fopen(file_name, "w");
-	if(received_file == NULL)
-		error("file", 1);
+		FILE *received_file;
+		received_file = fopen(file_name, "w");
+		if(received_file == NULL)
+			error("file", 1);
 
-	int remain_data = file_size;
-	ssize_t len;
-	while((remain_data>0) && ((len = recv(peer_socket, buffer, 256, 0))>0)){
-		fwrite(buffer, sizeof(char), len, received_file);
-		remain_data -= len;
-		fprintf(stdout, "received: %d bytes, %d bytes remaining\n", len, remain_data);
+		remain_data = file_size;
+		while((remain_data>0) && ((len = recv(peer_socket, buffer, 256, 0))>0)){
+			fwrite(buffer, sizeof(char), len, received_file);
+			remain_data -= len;
+			fprintf(stdout, "received: %d bytes, %d bytes remaining\n", len, remain_data);
+		}
+		fclose(received_file);
+		break;
+	case 0x1ef1:
+		recv(peer_socket, file_name, 256, 0);
+		printf("file name: %s\n", file_name);
+
+		int fd = open(file_name, O_RDONLY);
+		if(fd<0)
+			error("opening file", 1);
+		struct stat file_stat;
+		if(fstat(fd, &file_stat)<0)
+			error("fstat", 1);
+
+		char file_size_buffer[32];
+		sprintf(file_size_buffer, "%d", file_stat.st_size);
+		printf("file size: %s bytes\n", file_size_buffer);
+		len = send(peer_socket, file_size_buffer, 32, 0);
+		if(len<0)
+			error("file size", 1);
+
+		long offset = 0;
+		int remain_data = file_stat.st_size;
+		int sent_bytes = 0;
+		while(((sent_bytes = sendfile(peer_socket, fd, &offset, 256))>0) && (remain_data>0)){
+			remain_data -= sent_bytes;
+			fprintf(stdout, "sent %d bytes, %d bytes remaining\n", sent_bytes, remain_data);
+		}
+		break;
+	case 0x1ef2:
+		
+		break;
+	case 0x1ef3:
+		
+		break;
+	default:
+
+		break;
 	}
-	fclose(received_file);
 	close(peer_socket);
 	close(server_socket);
 
