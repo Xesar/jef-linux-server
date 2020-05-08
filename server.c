@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <sys/sendfile.h>
 #include <dirent.h>
+#include <time.h>
 
 #define PORT_NO			20001
 #define SERVER_IP		"127.0.0.1"
@@ -65,6 +66,12 @@ void send_file_size(short socket_id, int file_size){
 	ssize_t len = send(socket_id, &file_size, sizeof(file_size), 0);
 	if(len<0)
 		error("file name", 1);
+}
+
+void send_file_time(short socket_id, long timestamp){
+	ssize_t len = send(socket_id, &timestamp, sizeof(timestamp), 0);
+	if(len<0)
+		error("time stamp", 1);
 }
 
 void send_file(short socket_id, short fd, int file_size){
@@ -143,7 +150,8 @@ void recv_file(short socket_id, char * file_name, int file_size){
 		printf("received: %d bytes, %d bytes remaining\n", len, remain_data);
 	}
 
-	// this is not working for multiple files, bad data from recv
+	// this is not working for multiple files
+	// recv sucks in too much data, including more sends from client than one
 	// while((remain_data>0) && (len = recv(socket_id, buffer, sizeof(buffer), 0))>0){
 	// 	fwrite(buffer, sizeof(char), len, rec_file);
 	// 	remain_data -= len;
@@ -188,8 +196,6 @@ int main(int argc, char *argv[]){
 			file_size = recv_file_size(peer_socket);
 			recv_file(peer_socket, file_name, file_size);
 		}
-		close(peer_socket);
-		close(server_socket);
 	}else if(header==JEF_FILE_DOWN){
 		short file_amount = recv_file_amount(peer_socket);
 		char file_name[256];
@@ -207,37 +213,38 @@ int main(int argc, char *argv[]){
 			send_file_size(peer_socket, file_size);
 			send_file(peer_socket, fd, file_size);
 		}
-		close(peer_socket);
-		close(server_socket);
 	}else if(header==JEF_FILE_LIST){
-		DIR *dir = opendir(FILES_DIR);
-		struct dirent *dir_ent;
-		if(dir==NULL)
-			error("dir", 1);
+		struct dirent ** file_ents;
 
-		while(dir_ent=readdir(dir)){
-			if(dir_ent->d_type==8){
-				send_header(peer_socket, F_HDR);
-				FILE *f_ptr;
-				char file_name[256];
-				strcpy(file_name, dir_ent->d_name);
-				printf("%s", file_name);
-				f_ptr = fopen(to_path(file_name), "r");
-				fseek(f_ptr, 0, SEEK_END);
-				int f_len = ftell(f_ptr);
-				printf(" %dB\n", f_len);
-				send_file_name(peer_socket, file_name);
-				send_file_size(peer_socket, f_len);
-				fclose(f_ptr);
+		int n = scandir(FILES_DIR, &file_ents, 0, alphasort);
+
+		if(n<3)
+			error("scandir", 1);
+
+		for(int i=2; i<n; i++){
+			
+
+			struct stat file_stat;
+			int len = stat(to_path(file_ents[i]->d_name), &file_stat);
+			if(len!=0){
+				send_header(peer_socket, END_HDR);
+				error("file stat", 1);
 			}
+
+			send_header(peer_socket, F_HDR);
+			send_file_name(peer_socket, file_ents[i]->d_name);
+			send_file_size(peer_socket, file_stat.st_size);
+			send_file_time(peer_socket, file_stat.st_mtime);
+
+			free(file_ents[i]);
 		}
+		free(file_ents);
+
 		send_header(peer_socket, END_HDR);
-
-		closedir(dir);
-		close(peer_socket);
-		close(server_socket);
-
 	}
+	
+	close(peer_socket);
+	close(server_socket);
 
 	return 0;
 }
