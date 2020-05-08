@@ -13,6 +13,7 @@
 
 #define PORT_NO			20001
 #define SERVER_IP		"127.0.0.1"
+#define FILES_DIR		"files/"
 
 #define JEF_FILE_UP		0
 #define JEF_FILE_DOWN	1
@@ -51,6 +52,10 @@ void send_file_amount(short socket_id, short file_amount){
 }
 
 void send_file_name(short socket_id, char * file_name){
+	char * ptr;
+	ptr = strrchr(file_name, '/');
+	if(ptr!=NULL)
+		strcpy(file_name, ptr+1);
 	ssize_t len = send(socket_id, file_name, 256, 0);
 	if(len<0)
 		error("file name", 1);
@@ -77,7 +82,20 @@ const char * recv_file_name(short socket_id){
 	ssize_t len = recv(socket_id, file_name, 256, 0);
 	if(len<0)
 		error("file name", 1);
+	char * ptr;
+	ptr = strrchr(file_name, '/');
+	if(ptr!=NULL)
+		strcpy(file_name, ptr+1);
 	return file_name;
+}
+
+char * to_path(const char * file_name){
+	static char temp[256];
+	strcpy(temp, file_name);
+	size_t len = strlen(FILES_DIR);
+	memmove(temp+len, temp, strlen(temp)+1);
+	memcpy(temp,FILES_DIR,len);
+	return temp;
 }
 
 int recv_file_size(short socket_id){
@@ -166,17 +184,18 @@ int main(int argc, char *argv[]){
 		int file_size;
 		char file_name[256];
 		for(int i=0; i<file_count; i++){
-			strcpy(file_name, recv_file_name(peer_socket));
+			strcpy(file_name, to_path(recv_file_name(peer_socket)));
 			file_size = recv_file_size(peer_socket);
 			recv_file(peer_socket, file_name, file_size);
 		}
-
+		close(peer_socket);
+		close(server_socket);
 	}else if(header==JEF_FILE_DOWN){
 		short file_amount = recv_file_amount(peer_socket);
 		char file_name[256];
 		for(short i=0; i<file_amount; i++){
-			strcpy(file_name, recv_file_name(peer_socket));
-
+			strcpy(file_name, to_path(recv_file_name(peer_socket)));
+			
 			int fd = open(file_name, O_RDONLY);
 			if(fd<0)
 				error("opening file", 1);
@@ -188,8 +207,10 @@ int main(int argc, char *argv[]){
 			send_file_size(peer_socket, file_size);
 			send_file(peer_socket, fd, file_size);
 		}
+		close(peer_socket);
+		close(server_socket);
 	}else if(header==JEF_FILE_LIST){
-		DIR *dir = opendir("/home/xesar/prog/c/jef-linux-server");
+		DIR *dir = opendir(FILES_DIR);
 		struct dirent *dir_ent;
 		if(dir==NULL)
 			error("dir", 1);
@@ -198,10 +219,14 @@ int main(int argc, char *argv[]){
 			if(dir_ent->d_type==8){
 				send_header(peer_socket, F_HDR);
 				FILE *f_ptr;
-				f_ptr = fopen(dir_ent->d_name, "r");
+				char file_name[256];
+				strcpy(file_name, dir_ent->d_name);
+				printf("%s", file_name);
+				f_ptr = fopen(to_path(file_name), "r");
 				fseek(f_ptr, 0, SEEK_END);
 				int f_len = ftell(f_ptr);
-				send_file_name(peer_socket, dir_ent->d_name);
+				printf(" %dB\n", f_len);
+				send_file_name(peer_socket, file_name);
 				send_file_size(peer_socket, f_len);
 				fclose(f_ptr);
 			}
@@ -209,10 +234,10 @@ int main(int argc, char *argv[]){
 		send_header(peer_socket, END_HDR);
 
 		closedir(dir);
+		close(peer_socket);
+		close(server_socket);
 
 	}
-	close(peer_socket);
-	close(server_socket);
 
 	return 0;
 }
