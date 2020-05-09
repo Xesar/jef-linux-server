@@ -162,6 +162,24 @@ void recv_file(short socket_id, char * file_name, int file_size){
 	fclose(rec_file);
 }
 
+int timesort(const struct dirent **a, const struct dirent **b){
+	struct stat a_stat, b_stat;
+	char a_name[256], b_name[256];
+	strcpy(a_name, to_path((*a)->d_name));
+	strcpy(b_name, to_path((*b)->d_name));
+	stat(a_name, &a_stat);
+	stat(b_name, &b_stat);
+	return (a_stat.st_mtime>b_stat.st_mtime)? 1: -1;
+}
+
+int dirfilter(const struct dirent *a){
+	if(strlen(a->d_name)==1 && a->d_name[0]=='.')
+		return 0;
+	if(strlen(a->d_name)==2 && a->d_name[1]=='.' && a->d_name[0]=='.')
+		return 0;
+	return 1;
+}
+
 int main(int argc, char *argv[]){
 	int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 	if(server_socket<0)
@@ -198,8 +216,8 @@ int main(int argc, char *argv[]){
 		}
 	}else if(header==JEF_FILE_DOWN){
 		short file_amount = recv_file_amount(peer_socket);
-		char file_name[256];
 		for(short i=0; i<file_amount; i++){
+			char file_name[256];
 			strcpy(file_name, to_path(recv_file_name(peer_socket)));
 			
 			int fd = open(file_name, O_RDONLY);
@@ -222,8 +240,6 @@ int main(int argc, char *argv[]){
 			error("scandir", 1);
 
 		for(int i=2; i<n; i++){
-			
-
 			struct stat file_stat;
 			int len = stat(to_path(file_ents[i]->d_name), &file_stat);
 			if(len!=0){
@@ -241,6 +257,39 @@ int main(int argc, char *argv[]){
 		free(file_ents);
 
 		send_header(peer_socket, END_HDR);
+	}else if(header==JEF_FILE_NEWEST){
+		short file_amount = recv_file_amount(peer_socket);
+
+		struct dirent ** file_ents;
+
+		int n = scandir(FILES_DIR, &file_ents, dirfilter, timesort);
+		if(n<1)
+			error("scandir", 1);
+
+		if(file_amount>n)
+			file_amount=n;
+
+		send_file_amount(peer_socket, file_amount);
+
+		for(int i=0; i<file_amount; i++){
+			char full_name[256];
+			struct stat file_stat;
+			strcpy(full_name, to_path(file_ents[i]->d_name));
+			int len = stat(full_name, &file_stat);
+			if(len!=0)
+				error("file stat", 1);
+
+			int fd = open(full_name, O_RDONLY);
+			if(fd<0)
+				error("opening file", 1);
+
+			send_file_name(peer_socket, full_name);
+			send_file_size(peer_socket, file_stat.st_size);
+			send_file(peer_socket, fd, file_stat.st_size);
+
+			free(file_ents[i]);
+		}
+		free(file_ents);
 	}
 	
 	close(peer_socket);
