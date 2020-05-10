@@ -21,9 +21,6 @@
 #define JEF_FILE_NEWEST	2
 #define JEF_FILE_LIST	3
 
-#define F_HDR			0
-#define END_HDR			9
-
 void error(const char *msg, int end){
 	perror(msg);
 	if(end)
@@ -37,13 +34,6 @@ short handshake(short socket_id){
 		error("handshake", 1);
 	header ^= 0x1ef0;
 	return header;
-}
-
-void send_header(short socket_id, unsigned char h_type){
-	short header = 0xf110 | (h_type & 0xf);
-	ssize_t len = send(socket_id, &header, sizeof(header), 0);
-	if(len<0)
-		error("header", 1);
 }
 
 void send_file_amount(short socket_id, short file_amount){
@@ -169,7 +159,7 @@ int timesort(const struct dirent **a, const struct dirent **b){
 	strcpy(b_name, to_path((*b)->d_name));
 	stat(a_name, &a_stat);
 	stat(b_name, &b_stat);
-	return (a_stat.st_mtime>b_stat.st_mtime)? 1: -1;
+	return (a_stat.st_mtime<b_stat.st_mtime)? 1: -1;
 }
 
 int dirfilter(const struct dirent *a){
@@ -234,20 +224,20 @@ int main(int argc, char *argv[]){
 	}else if(header==JEF_FILE_LIST){
 		struct dirent ** file_ents;
 
-		int n = scandir(FILES_DIR, &file_ents, 0, alphasort);
+		int n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
 
-		if(n<3)
+		if(n<0)
 			error("scandir", 1);
 
-		for(int i=2; i<n; i++){
+		send_file_amount(peer_socket, n);
+
+		for(int i=0; i<n; i++){
 			struct stat file_stat;
 			int len = stat(to_path(file_ents[i]->d_name), &file_stat);
 			if(len!=0){
-				send_header(peer_socket, END_HDR);
 				error("file stat", 1);
 			}
 
-			send_header(peer_socket, F_HDR);
 			send_file_name(peer_socket, file_ents[i]->d_name);
 			send_file_size(peer_socket, file_stat.st_size);
 			send_file_time(peer_socket, file_stat.st_mtime);
@@ -256,7 +246,6 @@ int main(int argc, char *argv[]){
 		}
 		free(file_ents);
 
-		send_header(peer_socket, END_HDR);
 	}else if(header==JEF_FILE_NEWEST){
 		short file_amount = recv_file_amount(peer_socket);
 
@@ -283,9 +272,10 @@ int main(int argc, char *argv[]){
 			if(fd<0)
 				error("opening file", 1);
 
-			send_file_name(peer_socket, full_name);
+			send_file_name(peer_socket, file_ents[i]->d_name);
 			send_file_size(peer_socket, file_stat.st_size);
-			send_file(peer_socket, fd, file_stat.st_size);
+			printf("%s: %d\n", file_ents[i]->d_name, file_stat.st_size);
+			// send_file(peer_socket, fd, file_stat.st_size);
 
 			free(file_ents[i]);
 		}
