@@ -247,36 +247,40 @@ int main(int argc, char *argv[]){
 		free(file_ents);
 
 	}else if(header==JEF_FILE_NEWEST){
-		short file_amount = recv_file_amount(peer_socket);
-
 		struct dirent ** file_ents;
+		int file_count;
 
-		int n = scandir(FILES_DIR, &file_ents, dirfilter, timesort);
-		if(n<1)
+		int n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
+
+		if(n<0)
 			error("scandir", 1);
 
-		if(file_amount>n)
-			file_amount=n;
+		file_count = recv_file_amount(peer_socket);
 
-		send_file_amount(peer_socket, file_amount);
+		if(file_count>n)
+			file_count = n;
 
-		for(int i=0; i<file_amount; i++){
-			char full_name[256];
+		send_file_amount(peer_socket, file_count);
+
+		for(int i=0; i<file_count; i++){
 			struct stat file_stat;
-			strcpy(full_name, to_path(file_ents[i]->d_name));
-			int len = stat(full_name, &file_stat);
-			if(len!=0)
-				error("file stat", 1);
+			char full_path[256];
 
-			int fd = open(full_name, O_RDONLY);
+			int len = stat(to_path(file_ents[i]->d_name), &file_stat);
+			if(len!=0){
+				error("file stat", 1);
+			}
+
+			strcpy(full_path, to_path(file_ents[i]->d_name));
+
+			int fd = open(full_path, O_RDONLY);
 			if(fd<0)
 				error("opening file", 1);
 
 			send_file_name(peer_socket, file_ents[i]->d_name);
 			send_file_size(peer_socket, file_stat.st_size);
-			printf("%s: %d\n", file_ents[i]->d_name, file_stat.st_size);
-			// send_file(peer_socket, fd, file_stat.st_size);
-
+			send_file(peer_socket, fd, file_stat.st_size);
+			
 			free(file_ents[i]);
 		}
 		free(file_ents);
