@@ -12,14 +12,15 @@
 #include <dirent.h>
 #include <time.h>
 
-#define PORT_NO			20001
-#define SERVER_IP		"127.0.0.1"
-#define FILES_DIR		"files/"
+#define PORT_NO				20001
+#define SERVER_IP			"127.0.0.1"
+#define FILES_DIR			"files/"
 
-#define JEF_FILE_UP		0
-#define JEF_FILE_DOWN	1
-#define JEF_FILE_NEWEST	2
-#define JEF_FILE_LIST	3
+#define JEF_FILE_UP			0
+#define JEF_FILE_DOWN		1
+#define JEF_FILE_NEWEST		2
+#define JEF_FILE_LIST		3
+#define JEF_FILE_LISTALL	4
 
 void error(const char *msg, int end){
 	perror(msg);
@@ -170,6 +171,22 @@ int dirfilter(const struct dirent *a){
 	return 1;
 }
 
+int datefilter(const struct dirent *a){
+	// additionally dir filter
+	if(strlen(a->d_name)==1 && a->d_name[0]=='.')
+		return 0;
+	if(strlen(a->d_name)==2 && a->d_name[1]=='.' && a->d_name[0]=='.')
+		return 0;
+
+	struct stat a_stat;
+	char a_name[256];
+	strcpy(a_name, to_path(a->d_name));
+	stat(a_name, &a_stat);
+	if(a_stat.st_mtime<time(NULL)-24*60*60)
+		return 0;
+	return 1;
+}
+
 int main(void){
 	int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 	if(server_socket<0)
@@ -224,10 +241,14 @@ int main(void){
 				send_file_size(peer_socket, file_size);
 				send_file(peer_socket, fd, file_size);
 			}
-		}else if(header==JEF_FILE_LIST){
+		}else if(header==JEF_FILE_LIST || header==JEF_FILE_LISTALL){
 			struct dirent ** file_ents;
+			int n;
 
-			int n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
+			if(header==JEF_FILE_LIST)
+				n = scandir(FILES_DIR, &file_ents, datefilter, alphasort);
+			else
+				n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
 
 			if(n<0)
 				error("scandir", 1);
