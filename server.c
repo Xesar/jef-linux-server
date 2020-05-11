@@ -170,7 +170,7 @@ int dirfilter(const struct dirent *a){
 	return 1;
 }
 
-int main(int argc, char *argv[]){
+int main(void){
 	int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 	if(server_socket<0)
 		error("socket", 1);
@@ -188,105 +188,110 @@ int main(int argc, char *argv[]){
 
 	struct sockaddr_in peer_addr;
 	socklen_t sock_len = sizeof(struct sockaddr_in);
-	int peer_socket = accept(server_socket, (struct sockaddr *) &peer_addr, &sock_len);
-	if(peer_socket<0)
-		error("accept", 1);
-	printf("peer: %s\n", inet_ntoa(peer_addr.sin_addr));
 
-	short header = handshake(peer_socket);
+	int peer_socket;
+	while(peer_socket = accept(server_socket, (struct sockaddr *) &peer_addr, &sock_len)){
+		if(peer_socket<0)
+			error("accept", 1);
+		
+		printf("peer: %s\n", inet_ntoa(peer_addr.sin_addr));
 
-	if(header==JEF_FILE_UP){
-		short file_count = recv_file_amount(peer_socket);
-		int file_size;
-		char file_name[256];
-		for(int i=0; i<file_count; i++){
-			strcpy(file_name, to_path(recv_file_name(peer_socket)));
-			file_size = recv_file_size(peer_socket);
-			recv_file(peer_socket, file_name, file_size);
-		}
-	}else if(header==JEF_FILE_DOWN){
-		short file_amount = recv_file_amount(peer_socket);
-		for(short i=0; i<file_amount; i++){
+		short header = handshake(peer_socket);
+
+		if(header==JEF_FILE_UP){
+			short file_count = recv_file_amount(peer_socket);
+			int file_size;
 			char file_name[256];
-			strcpy(file_name, to_path(recv_file_name(peer_socket)));
-			
-			int fd = open(file_name, O_RDONLY);
-			if(fd<0)
-				error("opening file", 1);
-			struct stat file_stat;
-			if(fstat(fd, &file_stat)<0)
-				error("fstat", 1);
-			
-			int file_size = file_stat.st_size;
-			send_file_size(peer_socket, file_size);
-			send_file(peer_socket, fd, file_size);
-		}
-	}else if(header==JEF_FILE_LIST){
-		struct dirent ** file_ents;
-
-		int n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
-
-		if(n<0)
-			error("scandir", 1);
-
-		send_file_amount(peer_socket, n);
-
-		for(int i=0; i<n; i++){
-			struct stat file_stat;
-			int len = stat(to_path(file_ents[i]->d_name), &file_stat);
-			if(len!=0){
-				error("file stat", 1);
+			for(int i=0; i<file_count; i++){
+				strcpy(file_name, to_path(recv_file_name(peer_socket)));
+				file_size = recv_file_size(peer_socket);
+				recv_file(peer_socket, file_name, file_size);
 			}
-
-			send_file_name(peer_socket, file_ents[i]->d_name);
-			send_file_size(peer_socket, file_stat.st_size);
-			send_file_time(peer_socket, file_stat.st_mtime);
-
-			free(file_ents[i]);
-		}
-		free(file_ents);
-
-	}else if(header==JEF_FILE_NEWEST){
-		struct dirent ** file_ents;
-		int file_count;
-
-		int n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
-
-		if(n<0)
-			error("scandir", 1);
-
-		file_count = recv_file_amount(peer_socket);
-
-		if(file_count>n)
-			file_count = n;
-
-		send_file_amount(peer_socket, file_count);
-
-		for(int i=0; i<file_count; i++){
-			struct stat file_stat;
-			char full_path[256];
-
-			int len = stat(to_path(file_ents[i]->d_name), &file_stat);
-			if(len!=0){
-				error("file stat", 1);
+		}else if(header==JEF_FILE_DOWN){
+			short file_amount = recv_file_amount(peer_socket);
+			for(short i=0; i<file_amount; i++){
+				char file_name[256];
+				strcpy(file_name, to_path(recv_file_name(peer_socket)));
+				
+				int fd = open(file_name, O_RDONLY);
+				if(fd<0)
+					error("opening file", 1);
+				struct stat file_stat;
+				if(fstat(fd, &file_stat)<0)
+					error("fstat", 1);
+				
+				int file_size = file_stat.st_size;
+				send_file_size(peer_socket, file_size);
+				send_file(peer_socket, fd, file_size);
 			}
+		}else if(header==JEF_FILE_LIST){
+			struct dirent ** file_ents;
 
-			strcpy(full_path, to_path(file_ents[i]->d_name));
+			int n = scandir(FILES_DIR, &file_ents, dirfilter, alphasort);
 
-			int fd = open(full_path, O_RDONLY);
-			if(fd<0)
-				error("opening file", 1);
+			if(n<0)
+				error("scandir", 1);
 
-			send_file_name(peer_socket, file_ents[i]->d_name);
-			send_file_size(peer_socket, file_stat.st_size);
-			send_file(peer_socket, fd, file_stat.st_size);
-			
-			free(file_ents[i]);
+			send_file_amount(peer_socket, n);
+
+			for(int i=0; i<n; i++){
+				struct stat file_stat;
+				int len = stat(to_path(file_ents[i]->d_name), &file_stat);
+				if(len!=0){
+					error("file stat", 1);
+				}
+
+				send_file_name(peer_socket, file_ents[i]->d_name);
+				send_file_size(peer_socket, file_stat.st_size);
+				send_file_time(peer_socket, file_stat.st_mtime);
+
+				free(file_ents[i]);
+			}
+			free(file_ents);
+
+		}else if(header==JEF_FILE_NEWEST){
+			struct dirent ** file_ents;
+			int file_count;
+
+			int n = scandir(FILES_DIR, &file_ents, dirfilter, timesort);
+
+			if(n<0)
+				error("scandir", 1);
+
+			file_count = recv_file_amount(peer_socket);
+
+			if(file_count>n)
+				file_count = n;
+
+			send_file_amount(peer_socket, file_count);
+
+			for(int i=0; i<file_count; i++){
+				struct stat file_stat;
+				char full_path[256];
+
+				int len = stat(to_path(file_ents[i]->d_name), &file_stat);
+				if(len!=0){
+					error("file stat", 1);
+				}
+
+				strcpy(full_path, to_path(file_ents[i]->d_name));
+
+				int fd = open(full_path, O_RDONLY);
+				if(fd<0)
+					error("opening file", 1);
+
+				send_file_name(peer_socket, file_ents[i]->d_name);
+				send_file_size(peer_socket, file_stat.st_size);
+				send_file(peer_socket, fd, file_stat.st_size);
+				
+				free(file_ents[i]);
+			}
+			free(file_ents);
 		}
-		free(file_ents);
+		
+		close(peer_socket);
 	}
-	
-	close(peer_socket);
+
 	close(server_socket);
 
 	return 0;
